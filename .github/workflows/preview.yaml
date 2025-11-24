@@ -112,17 +112,27 @@ jobs:
         if: steps.check-secrets.outputs.configured == 'true'
         env:
           KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_SERVER: ${{ secrets.KUBE_SERVER }}
+          KUBE_CLUSTER: ${{ secrets.KUBE_CLUSTER }}
           KUBE_USER: ${{ secrets.KUBE_USER }}
+          KUBE_CONFIG_WORKSPACE: ${{ secrets.KUBE_CONFIG_WORKSPACE }}
         run: |
+          # Use provided values or defaults
           KUBE_USER="${KUBE_USER:-deployer}"
-          KUBE_CLUSTER="kubernetes"
-          KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
+          KUBE_CLUSTER="${KUBE_CLUSTER:-kubernetes}"
           
-          kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
-          kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
-          kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER"
-          kubectl config use-context "$KUBE_CLUSTER"
+          # If KUBE_CONFIG_WORKSPACE is provided, use it
+          if [[ -n "$KUBE_CONFIG_WORKSPACE" ]]; then
+            echo "$KUBE_CONFIG_WORKSPACE" | base64 -d > /tmp/kubeconfig
+            export KUBECONFIG=/tmp/kubeconfig
+            echo "Using kubeconfig from KUBE_CONFIG_WORKSPACE"
+          else
+            # Fallback to token-based auth
+            KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
+            kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
+            kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
+            kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER"
+            kubectl config use-context "$KUBE_CLUSTER"
+          fi
 
       - name: Verify cluster connection
         if: steps.check-secrets.outputs.configured == 'true'
@@ -212,7 +222,8 @@ jobs:
           echo "✅ Preview deployment to Kubernetes is not configured"
           echo "To enable preview deployments, add the following organization/repository secrets:"
           echo "- KUBE_TOKEN (required) - Kubernetes authentication token"
-          echo "- KUBE_SERVER (optional) - Kubernetes API server URL"
+          echo "- KUBE_CONFIG_WORKSPACE (optional) - Base64 encoded kubeconfig"
+          echo "- KUBE_CLUSTER (optional) - Kubernetes cluster name"
           echo "- KUBE_USER (optional) - Kubernetes user name"
           echo "This is optional and the workflow will pass without it."
 
@@ -281,7 +292,8 @@ jobs:
 
               To enable preview deployments, repository maintainers can add these secrets:
               - \`KUBE_TOKEN\` - Kubernetes authentication token (required)
-              - \`KUBE_SERVER\` - Kubernetes API server URL (optional)
+              - \`KUBE_CONFIG_WORKSPACE\` - Base64 encoded kubeconfig (optional)
+              - \`KUBE_CLUSTER\` - Kubernetes cluster name (optional)
               - \`KUBE_USER\` - Kubernetes user name (optional)
 
               ---
@@ -341,17 +353,27 @@ jobs:
         if: steps.check-secrets.outputs.configured == 'true'
         env:
           KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_SERVER: ${{ secrets.KUBE_SERVER }}
+          KUBE_CLUSTER: ${{ secrets.KUBE_CLUSTER }}
           KUBE_USER: ${{ secrets.KUBE_USER }}
+          KUBE_CONFIG_WORKSPACE: ${{ secrets.KUBE_CONFIG_WORKSPACE }}
         run: |
+          # Use provided values or defaults
           KUBE_USER="${KUBE_USER:-deployer}"
-          KUBE_CLUSTER="kubernetes"
-          KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
+          KUBE_CLUSTER="${KUBE_CLUSTER:-kubernetes}"
           
-          kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
-          kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
-          kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER"
-          kubectl config use-context "$KUBE_CLUSTER"
+          # If KUBE_CONFIG_WORKSPACE is provided, use it
+          if [[ -n "$KUBE_CONFIG_WORKSPACE" ]]; then
+            echo "$KUBE_CONFIG_WORKSPACE" | base64 -d > /tmp/kubeconfig
+            export KUBECONFIG=/tmp/kubeconfig
+            echo "Using kubeconfig from KUBE_CONFIG_WORKSPACE"
+          else
+            # Fallback to token-based auth
+            KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
+            kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
+            kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
+            kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER"
+            kubectl config use-context "$KUBE_CLUSTER"
+          fi
 
       - name: Delete preview namespace
         if: steps.check-secrets.outputs.configured == 'true'

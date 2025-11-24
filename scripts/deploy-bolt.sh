@@ -28,7 +28,6 @@ NAMESPACE="${NAMESPACE:-devspace}"
 RELEASE_NAME="${RELEASE_NAME:-bolt}"
 KUBE_USER="${KUBE_USER:-deployer}"
 KUBE_CLUSTER="${KUBE_CLUSTER:-kubernetes}"
-KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
 HELM_CHART_PATH="${HELM_CHART_PATH:-./helm/bolt}"
 IMAGE_TAG="${IMAGE_TAG:-production}"
 
@@ -43,10 +42,21 @@ echo ""
 
 # Configure kubectl
 echo -e "${GREEN}Configuring kubectl...${NC}"
-kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
-kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
-kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER" --namespace="$NAMESPACE"
-kubectl config use-context "$KUBE_CLUSTER"
+
+# Check if KUBE_CONFIG_WORKSPACE is provided
+if [ -n "$KUBE_CONFIG_WORKSPACE" ]; then
+  echo -e "${GREEN}Using kubeconfig from KUBE_CONFIG_WORKSPACE...${NC}"
+  echo "$KUBE_CONFIG_WORKSPACE" | base64 -d > /tmp/kubeconfig
+  export KUBECONFIG=/tmp/kubeconfig
+else
+  # Fallback to token-based auth
+  echo -e "${GREEN}Using token-based authentication...${NC}"
+  KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
+  kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
+  kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
+  kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER" --namespace="$NAMESPACE"
+  kubectl config use-context "$KUBE_CLUSTER"
+fi
 
 # Verify connection
 echo -e "${GREEN}Verifying connection...${NC}"
