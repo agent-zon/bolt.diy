@@ -279,6 +279,13 @@ jobs:
               kubectl logs -n ${namespace} -l app=bolt -f
               \`\`\`
 
+              ### Manual cleanup (when done):
+              \`\`\`bash
+              kubectl delete namespace ${namespace}
+              \`\`\`
+
+              **Note**: This preview environment will remain after PR is closed for inspection.
+
               ---
               Built with ❤️ by [bolt.diy](https://bolt.diy)
               `;
@@ -375,12 +382,15 @@ jobs:
             kubectl config use-context "$KUBE_CLUSTER"
           fi
 
-      - name: Delete preview namespace
+      - name: Preview namespace cleanup skipped
         if: steps.check-secrets.outputs.configured == 'true'
         run: |
           NAMESPACE="bolt-pr-${{ github.event.pull_request.number }}"
-          echo "Deleting namespace: $NAMESPACE"
-          kubectl delete namespace "$NAMESPACE" --ignore-not-found=true
+          echo "ℹ️  Namespace cleanup skipped: $NAMESPACE"
+          echo "The namespace will remain for manual inspection or cleanup"
+          echo ""
+          echo "To manually delete the namespace later:"
+          echo "  kubectl delete namespace $NAMESPACE"
 
       - name: Remove preview comment
         if: github.event_name == 'pull_request'
@@ -407,5 +417,8 @@ jobs:
       - name: Cleanup summary
         if: steps.check-secrets.outputs.configured == 'true'
         run: |
-          echo "✅ Preview environment cleaned up"
-          echo "🗑️ Deleted namespace: bolt-pr-${{ github.event.pull_request.number }}"
+          echo "ℹ️  Preview environment preserved"
+          echo "📦 Namespace remains: bolt-pr-${{ github.event.pull_request.number }}"
+          echo ""
+          echo "To delete manually:"
+          echo "  kubectl delete namespace bolt-pr-${{ github.event.pull_request.number }}"
