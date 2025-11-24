@@ -122,11 +122,13 @@ jobs:
           
           # If KUBE_CONFIG_WORKSPACE is provided, use it
           if [[ -n "$KUBE_CONFIG_WORKSPACE" ]]; then
-            echo "$KUBE_CONFIG_WORKSPACE" | base64 -d > /tmp/kubeconfig
-            export KUBECONFIG=/tmp/kubeconfig
             echo "Using kubeconfig from KUBE_CONFIG_WORKSPACE"
+            mkdir -p ${HOME}/.kube
+            echo "$KUBE_CONFIG_WORKSPACE" | base64 --decode > ${HOME}/.kube/config
+            chmod 600 ${HOME}/.kube/config
           else
             # Fallback to token-based auth
+            echo "Using token-based authentication"
             KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
             kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
             kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
@@ -370,11 +372,13 @@ jobs:
           
           # If KUBE_CONFIG_WORKSPACE is provided, use it
           if [[ -n "$KUBE_CONFIG_WORKSPACE" ]]; then
-            echo "$KUBE_CONFIG_WORKSPACE" | base64 -d > /tmp/kubeconfig
-            export KUBECONFIG=/tmp/kubeconfig
             echo "Using kubeconfig from KUBE_CONFIG_WORKSPACE"
+            mkdir -p ${HOME}/.kube
+            echo "$KUBE_CONFIG_WORKSPACE" | base64 --decode > ${HOME}/.kube/config
+            chmod 600 ${HOME}/.kube/config
           else
             # Fallback to token-based auth
+            echo "Using token-based authentication"
             KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
             kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
             kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"

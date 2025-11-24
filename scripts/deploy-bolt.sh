@@ -46,8 +46,10 @@ echo -e "${GREEN}Configuring kubectl...${NC}"
 # Check if KUBE_CONFIG_WORKSPACE is provided
 if [ -n "$KUBE_CONFIG_WORKSPACE" ]; then
   echo -e "${GREEN}Using kubeconfig from KUBE_CONFIG_WORKSPACE...${NC}"
-  echo "$KUBE_CONFIG_WORKSPACE" | base64 -d > /tmp/kubeconfig
-  export KUBECONFIG=/tmp/kubeconfig
+  mkdir -p ${HOME}/.kube
+  echo "$KUBE_CONFIG_WORKSPACE" | base64 --decode > ${HOME}/.kube/config
+  chmod 600 ${HOME}/.kube/config
+  echo -e "${GREEN}✓ Kubeconfig saved to ${HOME}/.kube/config${NC}"
 else
   # Fallback to token-based auth
   echo -e "${GREEN}Using token-based authentication...${NC}"
