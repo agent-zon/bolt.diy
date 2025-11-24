@@ -152,28 +152,28 @@ jobs:
         env:
           NAMESPACE: ${{ github.event.inputs.namespace || env.NAMESPACE }}
         run: |
-          # Use NAMESPACE input/env if provided, otherwise use bolt-pr-<number>
+          # Use NAMESPACE input/env if provided, otherwise use devspace
           if [[ -n "$NAMESPACE" ]]; then
             NS="$NAMESPACE"
             echo "Using provided namespace: $NS"
           else
-            NS="bolt-pr-${{ steps.pr.outputs.number }}"
+            NS="devspace"
             echo "Using default namespace: $NS"
           fi
           echo "namespace=$NS" >> $GITHUB_OUTPUT
           echo "Deploying to namespace: $NS"
 
-      - name: Create namespace
-        if: steps.check-secrets.outputs.configured == 'true'
-        run: |
-          kubectl create namespace ${{ steps.namespace.outputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
-          kubectl label namespace ${{ steps.namespace.outputs.namespace }} pr-number=${{ steps.pr.outputs.number }} --overwrite
+      # - name: Create namespace
+      #   if: steps.check-secrets.outputs.configured == 'true'
+      #   run: |
+      #     kubectl create namespace ${{ steps.namespace.outputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      #     kubectl label namespace ${{ steps.namespace.outputs.namespace }} pr-number=${{ steps.pr.outputs.number }} --overwrite
 
       - name: Deploy with Helm
         if: steps.check-secrets.outputs.configured == 'true'
         id: deploy
         run: |
-          RELEASE_NAME="bolt-pr-${{ steps.pr.outputs.number }}"
+          RELEASE_NAME="v${{ steps.pr.outputs.number }}"
           
           helm upgrade --install "$RELEASE_NAME" ./helm/bolt \
             --namespace ${{ steps.namespace.outputs.namespace }} \
@@ -271,7 +271,7 @@ jobs:
               |------|-------|
               | Latest commit | \`${{ github.sha }}\` |
               | Namespace | \`${namespace}\` |
-              | Release | \`bolt-pr-${prNumber}\` |
+              | Release | \`rc${prNumber}\` |
               | Service URL | \`${deployUrl}\` |
               | Image Tag | \`pr-${prNumber}\` |
 
@@ -349,108 +349,4 @@ jobs:
           echo ""
           echo "To access locally:"
           echo "  kubectl port-forward -n ${{ steps.namespace.outputs.namespace }} svc/bolt 5173:5173"
-
-  cleanup-preview:
-    name: Cleanup Preview
-    runs-on: ubuntu-latest
-    if: github.event.action == 'closed'
-
-    steps:
-      - name: Check if Kubernetes deployment is configured
-        id: check-secrets
-        run: |
-          if [[ -n "${{ secrets.KUBE_TOKEN }}" ]]; then
-            echo "configured=true" >> $GITHUB_OUTPUT
-          else
-            echo "configured=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Install kubectl
-        if: steps.check-secrets.outputs.configured == 'true'
-        uses: azure/setup-kubectl@v3
-        with:
-          version: v1.28.0
-
-      - name: Configure kubectl
-        if: steps.check-secrets.outputs.configured == 'true'
-        env:
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CLUSTER: ${{ secrets.KUBE_CLUSTER }}
-          KUBE_USER: ${{ secrets.KUBE_USER }}
-          KUBE_CONFIG_WORKSPACE: ${{ secrets.KUBE_CONFIG_WORKSPACE }}
-        run: |
-          # Use provided values or defaults
-          KUBE_USER="${KUBE_USER:-deployer}"
-          KUBE_CLUSTER="${KUBE_CLUSTER:-kubernetes}"
-          
-          # If KUBE_CONFIG_WORKSPACE is provided, use it
-          if [[ -n "$KUBE_CONFIG_WORKSPACE" ]]; then
-            echo "Using kubeconfig from KUBE_CONFIG_WORKSPACE"
-            mkdir -p ${HOME}/.kube
-            echo "$KUBE_CONFIG_WORKSPACE" | base64 --decode > ${HOME}/.kube/config
-            chmod 600 ${HOME}/.kube/config
-          else
-            # Fallback to token-based auth
-            echo "Using token-based authentication"
-            KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
-            kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
-            kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
-            kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER"
-            kubectl config use-context "$KUBE_CLUSTER"
-          fi
-
-      - name: Preview namespace cleanup skipped
-        if: steps.check-secrets.outputs.configured == 'true'
-        env:
-          NAMESPACE: ${{ env.NAMESPACE }}
-        run: |
-          # Use NAMESPACE env if provided, otherwise use bolt-pr-<number>
-          if [[ -n "$NAMESPACE" ]]; then
-            NS="$NAMESPACE"
-          else
-            NS="bolt-pr-${{ github.event.pull_request.number }}"
-          fi
-          echo "ℹ️  Namespace cleanup skipped: $NS"
-          echo "The namespace will remain for manual inspection or cleanup"
-          echo ""
-          echo "To manually delete the namespace later:"
-          echo "  kubectl delete namespace $NS"
-
-      - name: Remove preview comment
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        continue-on-error: true
-        with:
-          script: |
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-
-            for (const comment of comments) {
-              if (comment.body.includes('🚀 Preview deployment')) {
-                await github.rest.issues.deleteComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: comment.id,
-                });
-              }
-            }
-
-      - name: Cleanup summary
-        if: steps.check-secrets.outputs.configured == 'true'
-        env:
-          NAMESPACE: ${{ env.NAMESPACE }}
-        run: |
-          # Use NAMESPACE env if provided, otherwise use bolt-pr-<number>
-          if [[ -n "$NAMESPACE" ]]; then
-            NS="$NAMESPACE"
-          else
-            NS="bolt-pr-${{ github.event.pull_request.number }}"
-          fi
-          echo "ℹ️  Preview environment preserved"
-          echo "📦 Namespace remains: $NS"
-          echo ""
-          echo "To delete manually:"
-          echo "  kubectl delete namespace $NS"
+ 
