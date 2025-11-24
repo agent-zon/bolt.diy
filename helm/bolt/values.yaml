@@ -88,9 +88,9 @@ env:
   # Default context for models (optional)
   defaultNumCtx: ""
 
-# LLM Provider Configuration (will be added in step 2)
+# LLM Provider Configuration
+# Configure via secrets below or environment variables at runtime
 llm:
-  # Currently empty - will be populated with AI Core proxy config
   enabled: false
   
 # API Keys and Secrets

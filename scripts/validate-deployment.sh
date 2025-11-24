@@ -77,8 +77,6 @@ check_env() {
 echo -e "${BLUE}=== Helm Chart Files ===${NC}"
 check_file "helm/bolt/Chart.yaml" "Chart metadata"
 check_file "helm/bolt/values.yaml" "Default values"
-check_file "helm/bolt/values-aicore.yaml" "AI Core values (Phase 2)"
-check_file "helm/bolt/values-combined.yaml" "Combined values (Phase 3)"
 check_file "helm/bolt/README.md" "Helm README"
 check_dir "helm/bolt/templates" "Templates directory"
 echo ""
@@ -91,19 +89,17 @@ check_file "helm/bolt/templates/service.yaml" "Bolt service"
 check_file "helm/bolt/templates/configmap.yaml" "Bolt config"
 check_file "helm/bolt/templates/secret.yaml" "Bolt secrets"
 check_file "helm/bolt/templates/serviceaccount.yaml" "Service account"
-check_file "helm/bolt/templates/aicore-deployment.yaml" "AI Core proxy deployment"
-check_file "helm/bolt/templates/aicore-service.yaml" "AI Core proxy service"
-check_file "helm/bolt/templates/aicore-configmap.yaml" "AI Core proxy config"
+check_file "helm/bolt/templates/ingress.yaml" "Ingress (optional)"
+check_file "helm/bolt/templates/hpa.yaml" "Autoscaler (optional)"
 echo ""
 
 # Check Scripts
 echo -e "${BLUE}=== Deployment Scripts ===${NC}"
 check_file "scripts/deploy-bolt.sh" "Bolt deployment script"
-check_file "scripts/deploy-combined.sh" "Combined deployment script"
-check_file "scripts/test-aicore-integration.sh" "Integration test script"
+check_file "scripts/validate-deployment.sh" "Validation script"
 
 # Check if scripts are executable
-for script in scripts/deploy-bolt.sh scripts/deploy-combined.sh scripts/test-aicore-integration.sh; do
+for script in scripts/deploy-bolt.sh scripts/validate-deployment.sh; do
   if [ -x "$script" ]; then
     echo -e "${GREEN}✓${NC} Executable: $script"
   else
@@ -115,16 +111,16 @@ echo ""
 
 # Check GitHub Actions Workflows
 echo -e "${BLUE}=== GitHub Actions Workflows ===${NC}"
-check_file ".github/workflows/deploy-bolt.yaml" "Bolt deployment workflow"
-check_file ".github/workflows/deploy-combined.yaml" "Combined deployment workflow"
+check_file ".github/workflows/preview.yaml" "Preview deployment workflow"
+check_file ".github/workflows/docker.yaml" "Docker build workflow"
 echo ""
 
 # Check Documentation
 echo -e "${BLUE}=== Documentation ===${NC}"
-check_file "DEPLOYMENT.md" "Comprehensive deployment guide"
-check_file "README-K8S.md" "Quick reference guide"
-check_file "DEPLOYMENT-SUMMARY.md" "Implementation summary"
+check_file "DEPLOYMENT.md" "Deployment guide"
+check_file "README-K8S.md" "Quick reference"
 check_file "Dockerfile" "Dockerfile"
+check_file "helm/bolt/README.md" "Helm chart README"
 echo ""
 
 # Check Required Commands
@@ -157,10 +153,16 @@ if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
   echo ""
   echo -e "${GREEN}Your deployment setup is ready!${NC}"
   echo ""
-  echo -e "Next steps:"
-  echo -e "  1. Build Docker image: ${YELLOW}npm run dockerbuild:prod${NC}"
-  echo -e "  2. Set environment: ${YELLOW}export KUBE_TOKEN='your-token'${NC}"
-  echo -e "  3. Deploy Phase 1: ${YELLOW}./scripts/deploy-bolt.sh${NC}"
+  echo -e "Deployment options:"
+  echo -e "  ${BLUE}1. GitHub Actions (Recommended)${NC}"
+  echo -e "     - Configure secrets: KUBE_TOKEN, KUBE_SERVER (optional)"
+  echo -e "     - Open PR to main branch"
+  echo -e "     - Auto-deploy to bolt-pr-<number> namespace"
+  echo -e ""
+  echo -e "  ${BLUE}2. Manual Deployment${NC}"
+  echo -e "     - Build: ${YELLOW}npm run dockerbuild:prod${NC}"
+  echo -e "     - Export: ${YELLOW}export KUBE_TOKEN='your-token'${NC}"
+  echo -e "     - Deploy: ${YELLOW}./scripts/deploy-bolt.sh${NC}"
   echo -e ""
   echo -e "For detailed instructions, see: ${BLUE}DEPLOYMENT.md${NC}"
   exit 0

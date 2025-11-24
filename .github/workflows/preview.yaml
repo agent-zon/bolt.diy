@@ -4,28 +4,40 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to deploy'
+        required: true
+        type: number
 
 # Cancel in-progress runs on the same PR
 concurrency:
-  group: preview-${{ github.event.pull_request.number }}
+  group: preview-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   pull-requests: write
   deployments: write
+  packages: write
+
+env:
+  HELM_VERSION: 'v3.13.0'
+  KUBECTL_VERSION: 'v1.28.0'
+  REGISTRY: ghcr.io
 
 jobs:
   deploy-preview:
-    name: Deploy Preview
+    name: Deploy Preview to Kubernetes
     runs-on: ubuntu-latest
     if: github.event.action != 'closed'
     
     steps:
-      - name: Check if preview deployment is configured
+      - name: Check if Kubernetes deployment is configured
         id: check-secrets
         run: |
-          if [[ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" && -n "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]]; then
+          if [[ -n "${{ secrets.KUBE_TOKEN }}" ]]; then
             echo "configured=true" >> $GITHUB_OUTPUT
           else
             echo "configured=false" >> $GITHUB_OUTPUT
@@ -35,38 +47,177 @@ jobs:
         if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/checkout@v4
 
-      - name: Setup and Build
-        if: steps.check-secrets.outputs.configured == 'true'
-        uses: ./.github/actions/setup-and-build
+      - name: Set PR number
+        id: pr
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "number=${{ github.event.inputs.pr_number }}" >> $GITHUB_OUTPUT
+          else
+            echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Build for production
+      - name: Set lowercase image name
         if: steps.check-secrets.outputs.configured == 'true'
-        run: pnpm run build
+        id: image
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+      
+      - name: Set up Docker Buildx
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Log in to GitHub Container Registry
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker image
+        if: steps.check-secrets.outputs.configured == 'true'
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=pr-${{ steps.pr.outputs.number }}
+            type=sha,format=short,prefix=pr-${{ steps.pr.outputs.number }}-
+
+      - name: Build and push Docker image
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          target: bolt-ai-production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Helm
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubectl
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Configure kubectl
+        if: steps.check-secrets.outputs.configured == 'true'
         env:
-          NODE_ENV: production
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_SERVER: ${{ secrets.KUBE_SERVER }}
+          KUBE_USER: ${{ secrets.KUBE_USER }}
+        run: |
+          KUBE_USER="${KUBE_USER:-deployer}"
+          KUBE_CLUSTER="kubernetes"
+          KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
+          
+          kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
+          kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
+          kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER"
+          kubectl config use-context "$KUBE_CLUSTER"
 
-      - name: Deploy to Cloudflare Pages
+      - name: Verify cluster connection
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          kubectl cluster-info
+          kubectl version --short || kubectl version
+
+      - name: Set namespace
+        if: steps.check-secrets.outputs.configured == 'true'
+        id: namespace
+        run: |
+          NAMESPACE="bolt-pr-${{ steps.pr.outputs.number }}"
+          echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+          echo "Deploying to namespace: $NAMESPACE"
+
+      - name: Create namespace
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          kubectl create namespace ${{ steps.namespace.outputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace ${{ steps.namespace.outputs.namespace }} pr-number=${{ steps.pr.outputs.number }} --overwrite
+
+      - name: Deploy with Helm
         if: steps.check-secrets.outputs.configured == 'true'
         id: deploy
-        uses: cloudflare/pages-action@v1
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: bolt-diy-preview
-          directory: build/client
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_NAME="bolt-pr-${{ steps.pr.outputs.number }}"
+          
+          helm upgrade --install "$RELEASE_NAME" ./helm/bolt \
+            --namespace ${{ steps.namespace.outputs.namespace }} \
+            --create-namespace \
+            --set image.repository=${{ env.REGISTRY }}/${{ steps.image.outputs.name }} \
+            --set image.tag=pr-${{ steps.pr.outputs.number }} \
+            --set namespace=${{ steps.namespace.outputs.namespace }} \
+            --set nameOverride=bolt \
+            --set fullnameOverride=bolt \
+            --wait \
+            --timeout 10m \
+            --atomic
+          
+          # Get the service info for the URL
+          SERVICE_IP=$(kubectl get svc bolt -n ${{ steps.namespace.outputs.namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+          SERVICE_HOST=$(kubectl get svc bolt -n ${{ steps.namespace.outputs.namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+          
+          if [[ -n "$SERVICE_IP" ]]; then
+            echo "url=http://$SERVICE_IP:5173" >> $GITHUB_OUTPUT
+          elif [[ -n "$SERVICE_HOST" ]]; then
+            echo "url=http://$SERVICE_HOST:5173" >> $GITHUB_OUTPUT
+          else
+            # Internal cluster URL
+            echo "url=http://bolt.${{ steps.namespace.outputs.namespace }}.svc.cluster.local:5173" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Wait for deployment
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          kubectl rollout status deployment/bolt \
+            -n ${{ steps.namespace.outputs.namespace }} \
+            --timeout=10m
+
+      - name: Get deployment status
+        if: steps.check-secrets.outputs.configured == 'true' && always()
+        run: |
+          echo "=== Deployment Status ==="
+          kubectl get deployment bolt -n ${{ steps.namespace.outputs.namespace }} || true
+          
+          echo ""
+          echo "=== Service Status ==="
+          kubectl get service bolt -n ${{ steps.namespace.outputs.namespace }} || true
+          
+          echo ""
+          echo "=== Pod Status ==="
+          kubectl get pods -n ${{ steps.namespace.outputs.namespace }} -l app=bolt || true
+          
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n ${{ steps.namespace.outputs.namespace }} --sort-by='.lastTimestamp' | tail -20 || true
+
+      - name: Get pod logs on failure
+        if: steps.check-secrets.outputs.configured == 'true' && failure()
+        run: |
+          echo "=== Pod Logs ==="
+          kubectl logs -n ${{ steps.namespace.outputs.namespace }} -l app=bolt --tail=100 || true
 
       - name: Preview deployment not configured
         if: steps.check-secrets.outputs.configured == 'false'
         run: |
-          echo "✅ Preview deployment is not configured for this repository"
-          echo "To enable preview deployments, add the following secrets:"
-          echo "- CLOUDFLARE_API_TOKEN"
-          echo "- CLOUDFLARE_ACCOUNT_ID"
+          echo "✅ Preview deployment to Kubernetes is not configured"
+          echo "To enable preview deployments, add the following organization/repository secrets:"
+          echo "- KUBE_TOKEN (required) - Kubernetes authentication token"
+          echo "- KUBE_SERVER (optional) - Kubernetes API server URL"
+          echo "- KUBE_USER (optional) - Kubernetes user name"
           echo "This is optional and the workflow will pass without it."
-          echo "url=https://preview-not-configured.example.com" >> $GITHUB_OUTPUT
 
       - name: Add preview URL comment to PR
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         continue-on-error: true
         with:
@@ -82,31 +233,58 @@ jobs:
             );
 
             const isConfigured = '${{ steps.check-secrets.outputs.configured }}' === 'true';
-            const deployUrl = '${{ steps.deploy.outputs.url }}' || 'https://preview-not-configured.example.com';
+            const deployUrl = '${{ steps.deploy.outputs.url }}' || 'Not available';
+            const namespace = '${{ steps.namespace.outputs.namespace }}';
+            const prNumber = '${{ steps.pr.outputs.number }}';
 
             let commentBody;
             if (isConfigured) {
-              commentBody = `🚀 Preview deployment is ready!
+              commentBody = `🚀 Preview deployment to Kubernetes is ready!
 
-              | Name | Link |
-              |------|------|
-              | Latest commit | ${{ github.sha }} |
-              | Preview URL | ${deployUrl} |
+              | Name | Value |
+              |------|-------|
+              | Latest commit | \`${{ github.sha }}\` |
+              | Namespace | \`${namespace}\` |
+              | Release | \`bolt-pr-${prNumber}\` |
+              | Service URL | \`${deployUrl}\` |
+              | Image Tag | \`pr-${prNumber}\` |
 
+              ### Access the preview:
+              
+              **Option 1: Port-forward (local access)**
+              \`\`\`bash
+              kubectl port-forward -n ${namespace} svc/bolt 5173:5173
+              # Then open http://localhost:5173
+              \`\`\`
+
+              **Option 2: Internal cluster URL**
+              \`\`\`
+              ${deployUrl}
+              \`\`\`
+
+              ### Check status:
+              \`\`\`bash
+              kubectl get pods -n ${namespace}
+              kubectl logs -n ${namespace} -l app=bolt -f
+              \`\`\`
+
+              ---
               Built with ❤️ by [bolt.diy](https://bolt.diy)
               `;
             } else {
-              commentBody = `ℹ️ Preview deployment not configured
+              commentBody = `ℹ️ Preview deployment to Kubernetes not configured
 
               | Name | Info |
               |------|------|
-              | Latest commit | ${{ github.sha }} |
-              | Status | Preview deployment requires Cloudflare secrets |
+              | Latest commit | \`${{ github.sha }}\` |
+              | Status | Preview deployment requires Kubernetes secrets |
 
-              To enable preview deployments, repository maintainers can add:
-              - \`CLOUDFLARE_API_TOKEN\` secret
-              - \`CLOUDFLARE_ACCOUNT_ID\` secret
+              To enable preview deployments, repository maintainers can add these secrets:
+              - \`KUBE_TOKEN\` - Kubernetes authentication token (required)
+              - \`KUBE_SERVER\` - Kubernetes API server URL (optional)
+              - \`KUBE_USER\` - Kubernetes user name (optional)
 
+              ---
               Built with ❤️ by [bolt.diy](https://bolt.diy)
               `;
             }
@@ -127,26 +305,16 @@ jobs:
               });
             }
 
-      - name: Run smoke tests on preview
-        run: |
-          if [[ "${{ steps.check-secrets.outputs.configured }}" == "true" ]]; then
-            echo "Running smoke tests on preview deployment..."
-            echo "Preview URL: ${{ steps.deploy.outputs.url }}"
-            # Basic HTTP check instead of Playwright tests
-            curl -f ${{ steps.deploy.outputs.url }} || echo "Preview environment check completed"
-          else
-            echo "✅ Smoke tests skipped - preview deployment not configured"
-            echo "This is normal and expected when Cloudflare secrets are not available"
-          fi
-
       - name: Preview workflow summary
+        if: steps.check-secrets.outputs.configured == 'true'
         run: |
           echo "✅ Preview deployment workflow completed successfully"
-          if [[ "${{ steps.check-secrets.outputs.configured }}" == "true" ]]; then
-            echo "🚀 Preview deployed to: ${{ steps.deploy.outputs.url }}"
-          else
-            echo "ℹ️ Preview deployment not configured (this is normal)"
-          fi
+          echo "🚀 Preview deployed to namespace: ${{ steps.namespace.outputs.namespace }}"
+          echo "📦 Image: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:pr-${{ steps.pr.outputs.number }}"
+          echo "🔗 Service: ${{ steps.deploy.outputs.url }}"
+          echo ""
+          echo "To access locally:"
+          echo "  kubectl port-forward -n ${{ steps.namespace.outputs.namespace }} svc/bolt 5173:5173"
 
   cleanup-preview:
     name: Cleanup Preview
@@ -154,27 +322,46 @@ jobs:
     if: github.event.action == 'closed'
 
     steps:
-      - name: Delete preview environment
-        uses: actions/github-script@v7
-        continue-on-error: true
-        with:
-          script: |
-            const deployments = await github.rest.repos.listDeployments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              environment: `preview-pr-${{ github.event.pull_request.number }}`,
-            });
+      - name: Check if Kubernetes deployment is configured
+        id: check-secrets
+        run: |
+          if [[ -n "${{ secrets.KUBE_TOKEN }}" ]]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+          fi
 
-            for (const deployment of deployments.data) {
-              await github.rest.repos.createDeploymentStatus({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                deployment_id: deployment.id,
-                state: 'inactive',
-              });
-            }
+      - name: Install kubectl
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: azure/setup-kubectl@v3
+        with:
+          version: v1.28.0
+
+      - name: Configure kubectl
+        if: steps.check-secrets.outputs.configured == 'true'
+        env:
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_SERVER: ${{ secrets.KUBE_SERVER }}
+          KUBE_USER: ${{ secrets.KUBE_USER }}
+        run: |
+          KUBE_USER="${KUBE_USER:-deployer}"
+          KUBE_CLUSTER="kubernetes"
+          KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
+          
+          kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
+          kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
+          kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER"
+          kubectl config use-context "$KUBE_CLUSTER"
+
+      - name: Delete preview namespace
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          NAMESPACE="bolt-pr-${{ github.event.pull_request.number }}"
+          echo "Deleting namespace: $NAMESPACE"
+          kubectl delete namespace "$NAMESPACE" --ignore-not-found=true
 
       - name: Remove preview comment
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         continue-on-error: true
         with:
@@ -194,3 +381,9 @@ jobs:
                 });
               }
             }
+
+      - name: Cleanup summary
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          echo "✅ Preview environment cleaned up"
+          echo "🗑️ Deleted namespace: bolt-pr-${{ github.event.pull_request.number }}"
