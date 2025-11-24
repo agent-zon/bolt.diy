@@ -23,7 +23,7 @@ if [ -z "$KUBE_TOKEN" ]; then
   exit 1
 fi
 
-# Set defaults
+# Set defaults - NAMESPACE can be provided via environment variable
 NAMESPACE="${NAMESPACE:-devspace}"
 RELEASE_NAME="${RELEASE_NAME:-bolt}"
 KUBE_USER="${KUBE_USER:-deployer}"

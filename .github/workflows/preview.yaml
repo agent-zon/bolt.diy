@@ -10,6 +10,10 @@ on:
         description: 'PR number to deploy'
         required: true
         type: number
+      namespace:
+        description: 'Kubernetes namespace (optional, defaults to bolt-pr-<number>)'
+        required: false
+        type: string
 
 # Cancel in-progress runs on the same PR
 concurrency:
@@ -145,10 +149,19 @@ jobs:
       - name: Set namespace
         if: steps.check-secrets.outputs.configured == 'true'
         id: namespace
+        env:
+          NAMESPACE: ${{ github.event.inputs.namespace || env.NAMESPACE }}
         run: |
-          NAMESPACE="bolt-pr-${{ steps.pr.outputs.number }}"
-          echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
-          echo "Deploying to namespace: $NAMESPACE"
+          # Use NAMESPACE input/env if provided, otherwise use bolt-pr-<number>
+          if [[ -n "$NAMESPACE" ]]; then
+            NS="$NAMESPACE"
+            echo "Using provided namespace: $NS"
+          else
+            NS="bolt-pr-${{ steps.pr.outputs.number }}"
+            echo "Using default namespace: $NS"
+          fi
+          echo "namespace=$NS" >> $GITHUB_OUTPUT
+          echo "Deploying to namespace: $NS"
 
       - name: Create namespace
         if: steps.check-secrets.outputs.configured == 'true'
@@ -388,13 +401,20 @@ jobs:
 
       - name: Preview namespace cleanup skipped
         if: steps.check-secrets.outputs.configured == 'true'
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
         run: |
-          NAMESPACE="bolt-pr-${{ github.event.pull_request.number }}"
-          echo "ℹ️  Namespace cleanup skipped: $NAMESPACE"
+          # Use NAMESPACE env if provided, otherwise use bolt-pr-<number>
+          if [[ -n "$NAMESPACE" ]]; then
+            NS="$NAMESPACE"
+          else
+            NS="bolt-pr-${{ github.event.pull_request.number }}"
+          fi
+          echo "ℹ️  Namespace cleanup skipped: $NS"
           echo "The namespace will remain for manual inspection or cleanup"
           echo ""
           echo "To manually delete the namespace later:"
-          echo "  kubectl delete namespace $NAMESPACE"
+          echo "  kubectl delete namespace $NS"
 
       - name: Remove preview comment
         if: github.event_name == 'pull_request'
@@ -420,9 +440,17 @@ jobs:
 
       - name: Cleanup summary
         if: steps.check-secrets.outputs.configured == 'true'
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
         run: |
+          # Use NAMESPACE env if provided, otherwise use bolt-pr-<number>
+          if [[ -n "$NAMESPACE" ]]; then
+            NS="$NAMESPACE"
+          else
+            NS="bolt-pr-${{ github.event.pull_request.number }}"
+          fi
           echo "ℹ️  Preview environment preserved"
-          echo "📦 Namespace remains: bolt-pr-${{ github.event.pull_request.number }}"
+          echo "📦 Namespace remains: $NS"
           echo ""
           echo "To delete manually:"
-          echo "  kubectl delete namespace bolt-pr-${{ github.event.pull_request.number }}"
+          echo "  kubectl delete namespace $NS"
