@@ -1,32 +1,33 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "ai-core-proxy.fullname" . }}
+  name: {{ include "bolt.fullname" . }}
   namespace: {{ .Values.namespace }}
   labels:
-    {{- include "ai-core-proxy.labels" . | nindent 4 }}
+    {{- include "bolt.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "ai-core-proxy.selectorLabels" . | nindent 6 }}
+      {{- include "bolt.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "ai-core-proxy.selectorLabels" . | nindent 8 }}
+        {{- include "bolt.selectorLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "ai-core-proxy.serviceAccountName" . }}
+      serviceAccountName: {{ include "bolt.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -41,10 +42,12 @@ spec:
           protocol: TCP
         envFrom:
         - configMapRef:
-            name: {{ include "ai-core-proxy.fullname" . }}
+            name: {{ include "bolt.fullname" . }}
+        - secretRef:
+            name: {{ include "bolt.fullname" . }}-secrets
         livenessProbe:
           httpGet:
-            path: /health
+            path: /
             port: http
           initialDelaySeconds: 30
           periodSeconds: 10
@@ -52,7 +55,7 @@ spec:
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /health
+            path: /
             port: http
           initialDelaySeconds: 10
           periodSeconds: 5

@@ -2,15 +2,15 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "ai-core-proxy.fullname" . }}
+  name: {{ include "bolt.fullname" . }}
   namespace: {{ .Values.namespace }}
   labels:
-    {{- include "ai-core-proxy.labels" . | nindent 4 }}
+    {{- include "bolt.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "ai-core-proxy.fullname" . }}
+    name: {{ include "bolt.fullname" . }}
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:

@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bolt.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bolt.labels" . | nindent 4 }}
+data:
+  # Node configuration
+  NODE_ENV: {{ .Values.env.nodeEnv | quote }}
+  PORT: {{ .Values.env.port | quote }}
+  HOST: {{ .Values.env.host | quote }}
+  
+  # Logging
+  VITE_LOG_LEVEL: {{ .Values.env.viteLogLevel | quote }}
+  
+  # Docker flag
+  RUNNING_IN_DOCKER: {{ .Values.env.runningInDocker | quote }}
+  
+  # Wrangler
+  WRANGLER_SEND_METRICS: {{ .Values.env.wranglerSendMetrics | quote }}
+  
+  {{- if .Values.env.defaultNumCtx }}
+  DEFAULT_NUM_CTX: {{ .Values.env.defaultNumCtx | quote }}
+  {{- end }}
+  
+  # LLM Base URLs
+  {{- if .Values.llmBaseUrls.ollamaApiBaseUrl }}
+  OLLAMA_API_BASE_URL: {{ .Values.llmBaseUrls.ollamaApiBaseUrl | quote }}
+  {{- end }}
+  {{- if .Values.llmBaseUrls.openaiLikeApiBaseUrl }}
+  OPENAI_LIKE_API_BASE_URL: {{ .Values.llmBaseUrls.openaiLikeApiBaseUrl | quote }}
+  {{- end }}
+  {{- if .Values.llmBaseUrls.togetherApiBaseUrl }}
+  TOGETHER_API_BASE_URL: {{ .Values.llmBaseUrls.togetherApiBaseUrl | quote }}
+  {{- end }}
+  {{- if .Values.llmBaseUrls.hyperbolicApiBaseUrl }}
+  HYPERBOLIC_API_BASE_URL: {{ .Values.llmBaseUrls.hyperbolicApiBaseUrl | quote }}
+  {{- end }}
+  {{- if .Values.llmBaseUrls.lmstudioApiBaseUrl }}
+  LMSTUDIO_API_BASE_URL: {{ .Values.llmBaseUrls.lmstudioApiBaseUrl | quote }}
+  {{- end }}
+  
+  # Service integration URLs
+  {{- if .Values.secrets.gitlabUrl }}
+  VITE_GITLAB_URL: {{ .Values.secrets.gitlabUrl | quote }}
+  {{- end }}
+  {{- if .Values.secrets.gitlabTokenType }}
+  VITE_GITLAB_TOKEN_TYPE: {{ .Values.secrets.gitlabTokenType | quote }}
+  {{- end }}

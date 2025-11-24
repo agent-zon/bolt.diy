@@ -1,0 +1,250 @@
+name: Deploy Bolt + AI Core Proxy (Combined)
+
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: 'Kubernetes namespace'
+        required: false
+        default: 'devspace'
+      environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      bolt_image_tag:
+        description: 'Bolt Docker image tag'
+        required: false
+        default: 'production'
+
+concurrency:
+  group: deploy-combined-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  HELM_VERSION: 'v3.13.0'
+  KUBECTL_VERSION: 'v1.28.0'
+  REGISTRY: ghcr.io
+
+jobs:
+  build-bolt:
+    name: Build Bolt Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        id: image
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker image
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=production
+            type=sha,format=short
+
+      - name: Build and push Bolt image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          target: bolt-ai-production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-combined:
+    name: Deploy Combined Stack
+    runs-on: ubuntu-latest
+    needs: build-bolt
+    environment: ${{ github.event.inputs.environment || 'development' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        id: image
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Configure kubectl
+        env:
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_SERVER: ${{ secrets.KUBE_SERVER }}
+          KUBE_USER: ${{ secrets.KUBE_USER }}
+        run: |
+          KUBE_USER="${KUBE_USER:-deployer}"
+          KUBE_CLUSTER="kubernetes"
+          KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
+          
+          kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
+          kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
+          kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER"
+          kubectl config use-context "$KUBE_CLUSTER"
+
+      - name: Verify cluster connection
+        run: |
+          kubectl cluster-info
+          kubectl version --short || kubectl version
+
+      - name: Set namespace
+        id: namespace
+        run: |
+          NAMESPACE="${{ github.event.inputs.namespace }}"
+          if [ -z "$NAMESPACE" ]; then
+            NAMESPACE="devspace"
+          fi
+          echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+          echo "Deploying to namespace: $NAMESPACE"
+
+      - name: Create namespace
+        run: |
+          kubectl create namespace ${{ steps.namespace.outputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Login to AI Core Proxy Registry
+        env:
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          REGISTRY="${DOCKER_REGISTRY:-scai-dev.common.repositories.cloud.sap}"
+          echo "$DOCKER_PASSWORD" | docker login "$REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
+
+      - name: Create Docker Registry Secret for AI Core Proxy
+        env:
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          REGISTRY="${DOCKER_REGISTRY:-scai-dev.common.repositories.cloud.sap}"
+          kubectl create secret docker-registry docker-registry-secret \
+            --docker-server="$REGISTRY" \
+            --docker-username="$DOCKER_USERNAME" \
+            --docker-password="$DOCKER_PASSWORD" \
+            --namespace="${{ steps.namespace.outputs.namespace }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Lint Helm Chart
+        run: |
+          helm lint ./helm/bolt
+
+      - name: Deploy Combined Stack with Helm
+        run: |
+          helm upgrade --install bolt ./helm/bolt \
+            --namespace ${{ steps.namespace.outputs.namespace }} \
+            --create-namespace \
+            -f ./helm/bolt/values-combined.yaml \
+            --set image.repository=${{ env.REGISTRY }}/${{ steps.image.outputs.name }} \
+            --set image.tag=${{ needs.build-bolt.outputs.image_tag }} \
+            --set aiCoreProxy.enabled=true \
+            --wait \
+            --timeout 15m \
+            --atomic
+
+      - name: Wait for AI Core Proxy
+        run: |
+          kubectl rollout status deployment/ai-core-proxy \
+            -n ${{ steps.namespace.outputs.namespace }} \
+            --timeout=10m
+
+      - name: Wait for Bolt
+        run: |
+          kubectl rollout status deployment/bolt \
+            -n ${{ steps.namespace.outputs.namespace }} \
+            --timeout=10m
+
+      - name: Get deployment status
+        if: always()
+        run: |
+          echo "=== AI Core Proxy Status ==="
+          kubectl get deployment ai-core-proxy -n ${{ steps.namespace.outputs.namespace }}
+          kubectl get service ai-core-proxy -n ${{ steps.namespace.outputs.namespace }}
+          kubectl get pods -n ${{ steps.namespace.outputs.namespace }} -l app=ai-core-proxy
+          
+          echo ""
+          echo "=== Bolt Status ==="
+          kubectl get deployment bolt -n ${{ steps.namespace.outputs.namespace }}
+          kubectl get service bolt -n ${{ steps.namespace.outputs.namespace }}
+          kubectl get pods -n ${{ steps.namespace.outputs.namespace }} -l app=bolt
+          
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n ${{ steps.namespace.outputs.namespace }} --sort-by='.lastTimestamp' | tail -30
+
+      - name: Test Integration
+        run: |
+          echo "Testing connectivity between Bolt and AI Core Proxy..."
+          
+          BOLT_POD=$(kubectl get pods -n ${{ steps.namespace.outputs.namespace }} -l app=bolt -o jsonpath='{.items[0].metadata.name}')
+          
+          if [ -n "$BOLT_POD" ]; then
+            echo "Checking environment variables in Bolt pod..."
+            kubectl exec -n ${{ steps.namespace.outputs.namespace }} "$BOLT_POD" -- env | grep -i openai || true
+            
+            echo "Testing connectivity to AI Core proxy..."
+            kubectl exec -n ${{ steps.namespace.outputs.namespace }} "$BOLT_POD" -- \
+              sh -c "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://ai-core-proxy.devspace.svc.cluster.local:3002/health || echo 'Failed'" || true
+          fi
+
+      - name: Get pod logs on failure
+        if: failure()
+        run: |
+          echo "=== AI Core Proxy Logs ==="
+          kubectl logs -n ${{ steps.namespace.outputs.namespace }} -l app=ai-core-proxy --tail=100 || true
+          
+          echo ""
+          echo "=== Bolt Logs ==="
+          kubectl logs -n ${{ steps.namespace.outputs.namespace }} -l app=bolt --tail=100 || true
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "✅ Combined deployment successful!"
+          echo ""
+          echo "=== Services ==="
+          echo "AI Core Proxy: http://ai-core-proxy.${{ steps.namespace.outputs.namespace }}.svc.cluster.local:3002"
+          echo "Bolt: http://bolt.${{ steps.namespace.outputs.namespace }}.svc.cluster.local:5173"
+          echo ""
+          echo "=== Access Bolt ==="
+          echo "kubectl port-forward -n ${{ steps.namespace.outputs.namespace }} svc/bolt 5173:5173"
+          echo "Then open: http://localhost:5173"
+          echo ""
+          echo "=== View Logs ==="
+          echo "Bolt: kubectl logs -n ${{ steps.namespace.outputs.namespace }} -l app=bolt -f"
+          echo "AI Core Proxy: kubectl logs -n ${{ steps.namespace.outputs.namespace }} -l app=ai-core-proxy -f"

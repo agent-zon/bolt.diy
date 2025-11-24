@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "ai-core-proxy.name" -}}
+{{- define "bolt.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "ai-core-proxy.fullname" -}}
+{{- define "bolt.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -24,16 +24,16 @@ Create a default fully qualified app name.
 {{/*
 Create chart name and version as used by the chart label.
 */}}
-{{- define "ai-core-proxy.chart" -}}
+{{- define "bolt.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels
 */}}
-{{- define "ai-core-proxy.labels" -}}
-helm.sh/chart: {{ include "ai-core-proxy.chart" . }}
-{{ include "ai-core-proxy.selectorLabels" . }}
+{{- define "bolt.labels" -}}
+helm.sh/chart: {{ include "bolt.chart" . }}
+{{ include "bolt.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -43,18 +43,18 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "ai-core-proxy.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "ai-core-proxy.name" . }}
+{{- define "bolt.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "bolt.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
-app: ai-core-proxy
+app: bolt
 {{- end }}
 
 {{/*
 Create the name of the service account to use
 */}}
-{{- define "ai-core-proxy.serviceAccountName" -}}
+{{- define "bolt.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "ai-core-proxy.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "bolt.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
