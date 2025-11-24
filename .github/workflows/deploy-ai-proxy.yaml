@@ -1,0 +1,175 @@
+name: Deploy AI Core Proxy
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'helm/ai-core-proxy/**'
+      - '.github/workflows/deploy-ai-proxy.yaml'
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: 'Kubernetes namespace'
+        required: false
+        default: 'devspace'
+      environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+concurrency:
+  group: deploy-ai-proxy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  HELM_VERSION: 'v3.13.0'
+  KUBECTL_VERSION: 'v1.28.0'
+
+jobs:
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'development' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Configure kubectl
+        env:
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_SERVER: ${{ secrets.KUBE_SERVER }}
+          KUBE_USER: ${{ secrets.KUBE_USER }}
+        run: |
+          KUBE_USER="${KUBE_USER:-deployer}"
+          KUBE_CLUSTER="kubernetes"
+          KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
+          
+          kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
+          kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
+          kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER"
+          kubectl config use-context "$KUBE_CLUSTER"
+
+      - name: Verify cluster connection
+        run: |
+          kubectl cluster-info
+          kubectl version --short
+
+      - name: Set namespace
+        id: namespace
+        run: |
+          NAMESPACE="${{ github.event.inputs.namespace }}"
+          if [ -z "$NAMESPACE" ]; then
+            NAMESPACE="devspace"
+          fi
+          echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+          echo "Deploying to namespace: $NAMESPACE"
+
+      - name: Create namespace
+        run: |
+          kubectl create namespace ${{ steps.namespace.outputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Login to Docker Registry
+        env:
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          REGISTRY="${DOCKER_REGISTRY:-scai-dev.common.repositories.cloud.sap}"
+          echo "$DOCKER_PASSWORD" | docker login "$REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
+
+      - name: Create Docker Registry Secret
+        env:
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          REGISTRY="${DOCKER_REGISTRY:-scai-dev.common.repositories.cloud.sap}"
+          kubectl create secret docker-registry docker-registry-secret \
+            --docker-server="$REGISTRY" \
+            --docker-username="$DOCKER_USERNAME" \
+            --docker-password="$DOCKER_PASSWORD" \
+            --namespace="${{ steps.namespace.outputs.namespace }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Lint Helm Chart
+        run: |
+          helm lint ./helm/ai-core-proxy
+
+      - name: Deploy with Helm
+        env:
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          REGISTRY="${DOCKER_REGISTRY:-scai-dev.common.repositories.cloud.sap}"
+          
+          helm upgrade --install ai-core-proxy ./helm/ai-core-proxy \
+            --namespace ${{ steps.namespace.outputs.namespace }} \
+            --create-namespace \
+            --set image.repository="$REGISTRY/aap/sap-ai-proxy" \
+            --set dockerRegistry.username="$DOCKER_USERNAME" \
+            --set dockerRegistry.password="$DOCKER_PASSWORD" \
+            --wait \
+            --timeout 10m \
+            --atomic
+
+      - name: Wait for deployment
+        run: |
+          kubectl rollout status deployment/ai-core-proxy \
+            -n ${{ steps.namespace.outputs.namespace }} \
+            --timeout=10m
+
+      - name: Get deployment status
+        if: always()
+        run: |
+          echo "=== Deployment Status ==="
+          kubectl get deployment ai-core-proxy -n ${{ steps.namespace.outputs.namespace }}
+          
+          echo ""
+          echo "=== Service Status ==="
+          kubectl get service ai-core-proxy -n ${{ steps.namespace.outputs.namespace }}
+          
+          echo ""
+          echo "=== Pod Status ==="
+          kubectl get pods -n ${{ steps.namespace.outputs.namespace }} -l app=ai-core-proxy
+          
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n ${{ steps.namespace.outputs.namespace }} --sort-by='.lastTimestamp' | tail -20
+
+      - name: Get pod logs
+        if: failure()
+        run: |
+          echo "=== Pod Logs ==="
+          kubectl logs -n ${{ steps.namespace.outputs.namespace }} -l app=ai-core-proxy --tail=100 || true
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "✅ Deployment successful!"
+          echo ""
+          echo "Service URL: http://ai-core-proxy.${{ steps.namespace.outputs.namespace }}.svc.cluster.local:3002"
+          echo ""
+          echo "To check logs:"
+          echo "  kubectl logs -n ${{ steps.namespace.outputs.namespace }} -l app=ai-core-proxy -f"
+          echo ""
+          echo "To port-forward:"
+          echo "  kubectl port-forward -n ${{ steps.namespace.outputs.namespace }} svc/ai-core-proxy 3002:3002"

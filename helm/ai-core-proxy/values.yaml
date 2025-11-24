@@ -1,0 +1,95 @@
+replicaCount: 1
+
+image:
+  repository: scai-dev.common.repositories.cloud.sap/aap/sap-ai-proxy
+  pullPolicy: Always
+  tag: "latest"
+
+imagePullSecrets:
+  - name: docker-registry-secret
+
+nameOverride: ""
+fullnameOverride: "ai-core-proxy"
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+
+service:
+  type: ClusterIP
+  port: 3002
+  targetPort: 3002
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: ai-core-proxy.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 250m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# AI Core Configuration
+aiCore:
+  config:
+    appname: "99a49c91-c0af-477b-89ff-5d180b7f401d!b1328962|xsuaa_std!b318061"
+    clientid: "sb-99a49c91-c0af-477b-89ff-5d180b7f401d!b1328962|xsuaa_std!b318061"
+    clientsecret: "dbc41c0c-aaee-4051-a4b0-86a2ace27598$j4unLvUk4In12Bo26PNr5Apkz9z0MD2Wyh-OJSsqP3k="
+    credential-type: "binding-secret"
+    identityzone: "experiments-1234"
+    identityzoneid: "95e48ebf-f5e5-4c04-a317-6f0a613054f6"
+    serviceurls:
+      AI_API_URL: "https://api.ai.intprod-eu12.eu-central-1.aws.ml.hana.ondemand.com"
+    url: "https://experiments-1234.authentication.eu12.hana.ondemand.com"
+  resourceGroup: "default"
+
+# Observability
+observability:
+  otel:
+    enabled: true
+    endpoint: "http://aspire-dashboard:18889"
+    serviceName: "ai-core-proxy"
+
+# Environment configuration
+env:
+  port: "3002"
+
+# Namespace to deploy to
+namespace: devspace

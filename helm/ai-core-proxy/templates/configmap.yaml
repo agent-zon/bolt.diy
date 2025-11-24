@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-core-proxy.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ai-core-proxy.labels" . | nindent 4 }}
+data:
+  PORT: {{ .Values.env.port | quote }}
+  AICORE_CONFIG: {{ toJson .Values.aiCore.config | quote }}
+  AICORE_RESOURCE_GROUP: {{ .Values.aiCore.resourceGroup | quote }}
+  {{- if .Values.observability.otel.enabled }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.observability.otel.endpoint | quote }}
+  OTEL_SERVICE_NAME: {{ .Values.observability.otel.serviceName | quote }}
+  {{- end }}
