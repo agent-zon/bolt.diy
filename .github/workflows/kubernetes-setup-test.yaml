@@ -1,0 +1,130 @@
+name: Kubernetes Setup Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: 'Optional Kubernetes namespace to target for setup validation'
+        required: false
+        type: string
+      pr_number:
+        description: 'Optional pull request number for context'
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      namespace:
+        required: false
+        type: string
+      pr_number:
+        required: false
+        type: string
+    secrets:
+      KUBE_TOKEN:
+        required: false
+      KUBE_CLUSTER:
+        required: false
+      KUBE_USER:
+        required: false
+      KUBE_CONFIG_WORKSPACE:
+        required: false
+      KUBE_SERVER:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  HELM_VERSION: 'v3.13.0'
+  KUBECTL_VERSION: 'v1.28.0'
+
+jobs:
+  verify-kubernetes-setup:
+    name: Verify Kubernetes Tooling and Access
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check-secrets.outputs.configured }}
+      namespace: ${{ steps.namespace.outputs.namespace }}
+    steps:
+      - name: Display context
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Requested namespace: ${{ inputs.namespace || github.event.inputs.namespace || 'not provided' }}"
+          echo "PR number: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || 'not provided' }}"
+
+      - name: Check Kubernetes credentials
+        id: check-secrets
+        run: |
+          if [[ -n "${{ secrets.KUBE_TOKEN }}" || -n "${{ secrets.KUBE_CONFIG_WORKSPACE }}" ]]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "::notice::Kubernetes credentials are not configured. Skipping setup validation."
+          fi
+
+      - name: Install Helm
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubectl
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
+      - name: Configure kubectl
+        if: steps.check-secrets.outputs.configured == 'true'
+        env:
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CLUSTER: ${{ secrets.KUBE_CLUSTER }}
+          KUBE_USER: ${{ secrets.KUBE_USER }}
+          KUBE_CONFIG_WORKSPACE: ${{ secrets.KUBE_CONFIG_WORKSPACE }}
+          KUBE_SERVER: ${{ secrets.KUBE_SERVER }}
+        run: |
+          KUBE_USER="${KUBE_USER:-deployer}"
+          KUBE_CLUSTER="${KUBE_CLUSTER:-kubernetes}"
+
+          if [[ -n "$KUBE_CONFIG_WORKSPACE" ]]; then
+            echo "Using kubeconfig from KUBE_CONFIG_WORKSPACE"
+            mkdir -p ${HOME}/.kube
+            echo "$KUBE_CONFIG_WORKSPACE" | base64 --decode > ${HOME}/.kube/config
+            chmod 600 ${HOME}/.kube/config
+          else
+            echo "Using token-based authentication"
+            KUBE_SERVER="${KUBE_SERVER:-https://kubernetes.default.svc}"
+            kubectl config set-cluster "$KUBE_CLUSTER" --server="$KUBE_SERVER" --insecure-skip-tls-verify=true
+            kubectl config set-credentials "$KUBE_USER" --token="$KUBE_TOKEN"
+            kubectl config set-context "$KUBE_CLUSTER" --cluster="$KUBE_CLUSTER" --user="$KUBE_USER"
+            kubectl config use-context "$KUBE_CLUSTER"
+          fi
+
+      - name: Select namespace
+        id: namespace
+        env:
+          NAMESPACE: ${{ inputs.namespace || github.event.inputs.namespace || '' }}
+        run: |
+          if [[ -n "$NAMESPACE" ]]; then
+            NS="$NAMESPACE"
+          else
+            NS="devspace"
+          fi
+
+          echo "Using namespace: $NS"
+          echo "namespace=$NS" >> $GITHUB_OUTPUT
+
+      - name: Validate Kubernetes connectivity
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          kubectl cluster-info
+          kubectl version --short || kubectl version
+          kubectl get ns ${{ steps.namespace.outputs.namespace }} || echo "Namespace not found; continuing"
+
+      - name: Summarize results
+        run: |
+          if [[ "${{ steps.check-secrets.outputs.configured }}" == "true" ]]; then
+            echo "✅ Kubernetes tooling installed and connectivity verified."
+          else
+            echo "ℹ️ Kubernetes setup test skipped due to missing credentials."
+          fi
