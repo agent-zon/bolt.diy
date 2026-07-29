@@ -1,0 +1,148 @@
+replicaCount: 1
+
+image:
+  repository: bolt-ai
+  pullPolicy: Always
+  tag: "production"
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: "bolt"
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: false
+  fsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+
+service:
+  type: ClusterIP
+  port: 5173
+  targetPort: 5173
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: bolt.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: bolt-tls
+  #    hosts:
+  #      - bolt.local
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Environment configuration
+env:
+  # Node environment
+  nodeEnv: "production"
+  port: "5173"
+  host: "0.0.0.0"
+  
+  # Logging
+  viteLogLevel: "info"
+  
+  # Docker flag
+  runningInDocker: "true"
+  
+  # Wrangler
+  wranglerSendMetrics: "false"
+  
+  # Default context for models (optional)
+  defaultNumCtx: ""
+
+# LLM Provider Configuration
+# Configure via secrets below or environment variables at runtime
+llm:
+  enabled: false
+  
+# API Keys and Secrets
+# These should be provided via external secrets or at deployment time
+# DO NOT commit actual API keys to values.yaml
+secrets:
+  # OpenAI
+  openaiApiKey: ""
+  
+  # Anthropic
+  anthropicApiKey: ""
+  
+  # Google
+  googleGenerativeAiApiKey: ""
+  
+  # Other providers
+  groqApiKey: ""
+  huggingfaceApiKey: ""
+  openRouterApiKey: ""
+  deepseekApiKey: ""
+  mistralApiKey: ""
+  cohereApiKey: ""
+  togetherApiKey: ""
+  hyperbolicApiKey: ""
+  xaiApiKey: ""
+  perplexityApiKey: ""
+  
+  # GitHub integration
+  githubAccessToken: ""
+  githubTokenType: ""
+  
+  # GitLab integration
+  gitlabAccessToken: ""
+  gitlabUrl: "https://gitlab.com"
+  gitlabTokenType: "personal-access-token"
+  
+  # Deployment integrations
+  vercelAccessToken: ""
+  netlifyAccessToken: ""
+  
+  # Supabase
+  supabaseUrl: ""
+  supabaseAnonKey: ""
+  supabaseAccessToken: ""
+
+# Custom base URLs for LLM providers
+llmBaseUrls:
+  ollamaApiBaseUrl: ""
+  openaiLikeApiBaseUrl: ""
+  togetherApiBaseUrl: ""
+  hyperbolicApiBaseUrl: ""
+  lmstudioApiBaseUrl: ""
+
+# Namespace to deploy to
+namespace: devspace
